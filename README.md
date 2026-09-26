@@ -9,6 +9,7 @@ output with any static host.
 - **Markdown posts** with YAML frontmatter (`title`, `date`, `tags`, `summary`)
 - **Tera templates** for full control over page layout
 - **Syntax highlighting** for code blocks (via syntect)
+- **Figures** — centered images with captions, and mermaid diagrams rendered to SVG at build time
 - **Tag pages** generated automatically from post frontmatter
 - **Open Graph & Twitter Card** meta tags
 - **robots.txt & sitemap.xml** generated automatically for search engines and agents
@@ -182,9 +183,46 @@ sblog uses `pulldown-cmark` with these extensions enabled:
 | Strikethrough | `~~text~~` | `~~done~~` |
 | Task lists | `- [ ]` / `- [x]` | `- [x] done` |
 | Smart punctuation | Auto-converted quotes/dashes | `"quotes"` → `"quotes"` |
-| Heading attributes | `{#custom-id}` | `## Title {#sec-1}` |
 | Fenced code blocks | Triple backticks with language | ` ```rust ` |
 | Syntax highlighting | Via syntect, `syn-` prefixed classes | ` ```python ` |
+
+### Images and diagrams
+
+sblog wraps images in `<figure>` elements and renders mermaid diagrams to
+SVG at build time. No JavaScript runs on the generated pages.
+
+**Images.** A paragraph that holds a single image becomes a centered
+figure. The optional link title becomes the caption:
+
+```markdown
+![Alt text for the image](images/photo.png "Figure 1: The system layout")
+```
+
+- With a title: centered figure with a caption below the image.
+- Without a title: centered figure with no caption.
+- Image paths are relative to the `static/` directory.
+
+**Mermaid diagrams.** A fenced code block with the `mermaid` info string
+renders to inline SVG during the build. The words after `mermaid` in the
+info string become the caption:
+
+````markdown
+```mermaid Figure 2: The request path
+flowchart LR
+    A[Markdown post] --> B[HTML page]
+```
+````
+
+- The renderer uses `mermaid-rs-renderer` at build time. The output is
+  plain SVG inside the HTML.
+- Diagram colors follow the site theme (light background, dark text,
+  accent blue).
+- Supported diagram types include flowchart, sequence, class, state,
+  ER, gantt, and pie.
+- A block with invalid mermaid syntax still builds. The renderer emits
+  a partial SVG, and the build does not fail.
+
+See `posts/figures-demo.md` in the repository for a working example.
 
 ---
 

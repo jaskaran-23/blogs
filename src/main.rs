@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -435,7 +436,7 @@ fn parse_post(path: &Path, text: &str) -> Result<Post, String> {
         .unwrap_or("post")
         .to_string();
 
-    let body_html = render_markdown(body);
+    let body_html = render_markdown(body, "../");
     let body_html = anchorize_headings(&body_html);
     let body_html = externalize_links(&body_html);
     let headings = extract_headings(body);
@@ -553,7 +554,7 @@ fn anchorize_headings(html: &str) -> String {
                 .filter(|s| !s.starts_with(' ') && !s.starts_with('/'))
                 .collect::<Vec<_>>()
                 .join(" ");
-            let id = slugify_heading(&text_only.trim());
+            let id = slugify_heading(text_only.trim());
             out.push_str("<h");
             out.push(level);
             out.push_str(" id=\"");
@@ -603,7 +604,12 @@ fn get_tags(meta: &Value) -> Vec<String> {
 }
 
 /// Render markdown to HTML with syntax highlighting for fenced code blocks.
-fn render_markdown(text: &str) -> String {
+///
+/// Images render as centered `<figure>` blocks with an optional caption
+/// from the markdown link title. Fenced blocks tagged `mermaid` render to
+/// inline SVG at build time, with the rest of the info string as caption.
+/// `depth` prefixes image sources, e.g. `"../"` for pages under `/post/`.
+fn render_markdown(text: &str, depth: &str) -> String {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -616,11 +622,33 @@ fn render_markdown(text: &str) -> String {
     let mut html = String::new();
     let mut code_lang: Option<String> = None;
     let mut code_lines: Vec<String> = Vec::new();
+    let mut image: Option<ImageInfo> = None;
+    let mut mermaid_cache: HashMap<String, String> = HashMap::new();
+    // Holds the HTML of a paragraph until it closes. If the paragraph
+    // holds only an image, its HTML is a figure and must not be wrapped
+    // in `<p>`, which would be invalid HTML.
+    let mut paragraph: Option<String> = None;
 
     let syntax_set = SyntaxSet::load_defaults_newlines();
 
     for event in parser {
         match event {
+            Event::Start(Tag::Paragraph) => {
+                paragraph = Some(String::new());
+            }
+            Event::End(TagEnd::Paragraph) => {
+                if let Some(buf) = paragraph.take() {
+                    // A lone figure renders as-is. Anything else keeps the
+                    // default `<p>` wrapper.
+                    if buf.starts_with("<figure") || buf.starts_with("<p class=") {
+                        html.push_str(&buf);
+                    } else {
+                        html.push_str("<p>");
+                        html.push_str(&buf);
+                        html.push_str("</p>\n");
+                    }
+                }
+            }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
                 code_lang = Some(lang.to_string());
                 code_lines.clear();
@@ -633,19 +661,163 @@ fn render_markdown(text: &str) -> String {
                 code_lines.push(t.to_string());
             }
             Event::End(TagEnd::CodeBlock) => {
-                let lang = code_lang.take().unwrap_or_default();
+                let info = code_lang.take().unwrap_or_default();
                 let code = code_lines.join("");
-                html.push_str(&highlight_code(&code, &lang, &syntax_set));
+                let (lang, title) = split_info_string(&info);
+                if lang == "mermaid" {
+                    let figure = render_mermaid_figure(&code, &title, &mut mermaid_cache);
+                    push_to_target(&mut html, &mut paragraph, &figure);
+                } else {
+                    let code_html = highlight_code(&code, &lang, &syntax_set);
+                    push_to_target(&mut html, &mut paragraph, &code_html);
+                }
+            }
+            Event::Start(Tag::Image {
+                dest_url, title, ..
+            }) => {
+                image = Some(ImageInfo {
+                    src: dest_url.to_string(),
+                    title: title.to_string(),
+                    alt: String::new(),
+                });
+            }
+            Event::Text(t) if image.is_some() => {
+                if let Some(img) = image.as_mut() {
+                    img.alt.push_str(&t);
+                }
+            }
+            Event::End(TagEnd::Image) => {
+                if let Some(img) = image.take() {
+                    let figure = render_image_figure(&img, depth);
+                    push_to_target(&mut html, &mut paragraph, &figure);
+                }
             }
             other => {
                 let mut buf = String::new();
                 pulldown_cmark::html::push_html(&mut buf, std::iter::once(other));
-                html.push_str(&buf);
+                push_to_target(&mut html, &mut paragraph, &buf);
             }
         }
     }
 
     html
+}
+
+/// Push rendered HTML either into the open paragraph buffer or straight
+/// into the page HTML, depending on whether a paragraph is open.
+fn push_to_target(html: &mut String, paragraph: &mut Option<String>, piece: &str) {
+    match paragraph {
+        Some(buf) => buf.push_str(piece),
+        None => html.push_str(piece),
+    }
+}
+
+/// An image collected from markdown events, shaped for `render_image_figure`.
+struct ImageInfo {
+    src: String,
+    title: String,
+    alt: String,
+}
+
+/// Render an image as a centered figure with an optional caption.
+///
+/// The markdown link title becomes the caption. Without a title, the image
+/// renders alone in a plain centered paragraph. `depth` prefixes the source
+/// so the URL resolves from the page that holds the figure.
+fn render_image_figure(img: &ImageInfo, depth: &str) -> String {
+    // Absolute URLs and root-relative paths pass through unchanged.
+    let src = if img.src.starts_with("http://")
+        || img.src.starts_with("https://")
+        || img.src.starts_with('/')
+    {
+        img.src.clone()
+    } else {
+        format!("{depth}{}", img.src)
+    };
+    let src = escape_html(&src);
+    let alt = escape_html(&img.alt);
+    if img.title.is_empty() {
+        return format!("<p class=\"figure-plain\"><img src=\"{src}\" alt=\"{alt}\"></p>\n");
+    }
+    let title = escape_html(&img.title);
+    format!(
+        "<figure class=\"figure\">\n  \
+         <img src=\"{src}\" alt=\"{alt}\">\n  \
+         <figcaption>{title}</figcaption>\n\
+         </figure>\n"
+    )
+}
+/// Render mermaid source to an inline SVG figure with an optional caption.
+///
+/// Renders are cached by source. A failed render keeps the source as a
+/// plain code block so nothing is lost, and the caller prints a warning.
+fn render_mermaid_figure(code: &str, title: &str, cache: &mut HashMap<String, String>) -> String {
+    let source = code.trim();
+    let svg = if let Some(cached) = cache.get(source) {
+        cached.clone()
+    } else {
+        let theme = mermaid_theme();
+        let opts = mermaid_rs_renderer::RenderOptions {
+            theme,
+            ..Default::default()
+        };
+        match mermaid_rs_renderer::render_with_options(source, opts) {
+            Ok(svg) => {
+                cache.insert(source.to_string(), svg.clone());
+                svg
+            }
+            Err(e) => {
+                eprintln!("sblog: warning: mermaid render failed: {e}");
+                return highlight_code(code, "mermaid", &SyntaxSet::load_defaults_newlines());
+            }
+        }
+    };
+
+    if title.is_empty() {
+        format!("<figure class=\"figure\">\n{svg}</figure>\n")
+    } else {
+        let caption = escape_html(title);
+        format!(
+            "<figure class=\"figure\">\n{svg}  \
+             <figcaption>{caption}</figcaption>\n\
+             </figure>\n"
+        )
+    }
+}
+
+/// Build the mermaid theme from the site palette so diagrams match the docs.
+fn mermaid_theme() -> mermaid_rs_renderer::Theme {
+    let mut theme = mermaid_rs_renderer::Theme::modern();
+    theme.primary_color = "#e8f1fb".to_string();
+    theme.primary_text_color = "#1a1a1a".to_string();
+    theme.primary_border_color = "#0066cc".to_string();
+    theme.line_color = "#444444".to_string();
+    theme.secondary_color = "#f7f7f7".to_string();
+    theme.tertiary_color = "#f7f7f7".to_string();
+    theme.background = "#ffffff".to_string();
+    theme.font_family = "system-ui, -apple-system, 'Segoe UI', Arial, sans-serif".to_string();
+    theme
+}
+
+/// Split a fenced code info string into the language and the title.
+///
+/// The first token is the language. The rest, trimmed, is the title.
+/// `mermaid The request flow` yields `("mermaid", "The request flow")`.
+fn split_info_string(info: &str) -> (String, String) {
+    let mut parts = info.splitn(2, char::is_whitespace);
+    let lang = parts.next().unwrap_or_default().to_string();
+    let title = parts.next().unwrap_or_default().trim().to_string();
+    (lang, title)
+}
+
+/// Escape HTML special characters in text destined for element content or
+/// attribute values.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 /// Highlight a code block with syntect and wrap it in a `<pre>`.
@@ -860,7 +1032,7 @@ fn document_for_about(root: &Path, config: &SiteConfig, posts: &[Post]) -> Docum
     let about_path = root.join(&config.posts_dir).join("about.md");
     let about_text = fs::read_to_string(&about_path).unwrap_or_default();
     let (_, body) = split_frontmatter(&about_text).unwrap_or(("", ""));
-    let body_html = render_markdown(body);
+    let body_html = render_markdown(body, "");
     let body_html = anchorize_headings(&body_html);
     let body_html = externalize_links(&body_html);
     let about_view = PostView {
@@ -1380,20 +1552,4 @@ fn format_read_time(summary: &str) -> String {
     let words = summary.split_whitespace().count();
     let minutes = (words as f64 / 200.0).ceil().max(1.0) as u32;
     format!("{minutes} min read")
-}
-
-/// Escape HTML special characters in a string.
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
