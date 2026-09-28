@@ -12,9 +12,11 @@ categories = ["command-line-utilities", "web-programming"]
 [dependencies]
 chrono = "0.4"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+notify = "8"
 pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = { package = "yaml_serde", version = "0.10" }
 syntect = { version = "5", default-features = false, features = ["parsing", "html", "default-syntaxes", "regex-onig"] }
 tera = { version = "2", features = ["glob_fs"] }
+tiny_http = "0.12"
 toml = "1"

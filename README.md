@@ -16,9 +16,9 @@ output with any static host.
 - **RSS 2.0 feed** (`feed.xml`) generated automatically for subscribers
 - **Reading time** estimated per post
 - **Full rebuild** with orphan cleanup
+- **Full rebuild** with orphan cleanup
 - **Static asset copying** — CSS, images, and more
-
----
+- **Development server** — `sblog --serve` builds, serves, watches, and live-reloads
 
 ## Quickstart
 
@@ -153,11 +153,21 @@ Output goes to `public/`.
 
 ### 7. Serve locally
 
+Use the built-in development server. It builds the site, serves `public/`,
+watches your sources, rebuilds on change, and live-reloads the browser:
+
 ```bash
-python3 -m http.server 8123 --directory public
+sblog --serve
+
+# Custom address (host:port, :port, port, or host)
+sblog --serve 0.0.0.0:8123
+sblog --serve :9000
+sblog --serve 9000
+sblog --serve myhost
 ```
 
-Open `http://localhost:8123/`.
+The default address is `localhost:8123`. See [Development server](#development-server-sblog---serve)
+for details.
 
 ### 8. Deploy
 
@@ -169,6 +179,47 @@ Upload the `public/` directory to any static host:
 - Vercel
 - Cloudflare Pages
 - Any S3-compatible bucket
+
+## Development server (`sblog --serve`)
+
+```bash
+sblog --serve [host[:port]]
+```
+
+One command starts a complete local writing environment:
+
+1. Builds the site once from a clean state.
+2. Serves the output directory over HTTP (default `localhost:8123`).
+3. Watches `posts/`, `templates/`, `static/`, and `config.toml`.
+4. Rebuilds changed pages and live-reloads open browser tabs.
+
+**What gets rebuilt:**
+
+| Change | Action |
+|--------|--------|
+| Post created or modified | Incremental rebuild of stale pages |
+| Post deleted | Full rebuild (removes the orphaned page) |
+| Template or `config.toml` | Full rebuild |
+| Static asset | Copy `static/` to the output directory |
+
+**Live reload.** Served HTML pages include a small script that long-polls
+`/__reload`. When a rebuild succeeds, the server answers the poll and the
+browser reloads. The script exists only in served pages. Files in the
+output directory on disk stay free of JavaScript.
+
+**Behavior details:**
+
+- Every response carries `Cache-Control: no-store`, so the browser always
+  fetches fresh pages during development.
+- A failed rebuild prints the error to stderr and keeps serving the last
+  good pages. The server does not stop.
+- Requests are limited to files under the output directory. Paths that
+  try to escape it (for example `../`) get a 404.
+- Directories resolve to their `index.html`.
+- The server is for local development. Do not expose it to the public
+  internet.
+
+Press `Ctrl-C` to stop.
 
 ---
 
@@ -418,6 +469,10 @@ Available on the **index**, **post**, and **about** pages.
 ---
 
 ## Build Modes
+
+Run `sblog --help` (or `-h`) to print all options.
+
+### Full build (`--full`)
 
 ### Full build (`--full`)
 

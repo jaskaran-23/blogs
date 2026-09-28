@@ -15,16 +15,55 @@ use crate::models::{
 };
 
 mod models;
+mod serve;
 
 fn main() {
     let root = std::env::current_dir().expect("get current directory");
-    let full = std::env::args().any(|a| a == "--full");
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    if argv.iter().any(|a| a == "-h" || a == "--help") {
+        print_usage();
+        return;
+    }
+
+    let full = argv.iter().any(|a| a == "--full");
+
+    // `--serve [host[:port]]`: build, serve, watch, and live-reload.
+    if let Some(pos) = argv.iter().position(|a| a == "--serve") {
+        let bind = argv.get(pos + 1).filter(|a| !a.starts_with("--"));
+        serve::run_serve(&root, bind.map(|s| s.as_str()));
+        return;
+    }
+
+    if let Some(flag) = argv.iter().find(|a| a.starts_with("--")) {
+        eprintln!("Unknown option: {flag}\n");
+        print_usage();
+        std::process::exit(2);
+    }
+
     let config = load_config(&root);
     if full {
         build_site(&root, &config);
     } else {
         build_stale(&root, &config);
     }
+}
+
+/// Print the command-line help text.
+fn print_usage() {
+    println!(
+        "sblog - a tiny static blog generator\n\
+        \n\
+        Usage: sblog [OPTIONS]\n\
+        \n\
+        Options:\n\
+          (no options)     Incremental build; rebuild only changed posts\n\
+          --full           Full rebuild; regenerate every page and remove orphans\n\
+          --serve [ADDR]   Build, serve, watch, and live-reload. ADDR is\n\
+                           host:port, :port, a port, or a host.\n\
+                           Default address: localhost:8123\n\
+          -h, --help       Print this help and exit\n"
+    );
 }
 
 /// Build the whole site. Rebuild every page and remove orphaned output files
@@ -795,6 +834,7 @@ fn mermaid_theme() -> mermaid_rs_renderer::Theme {
     theme.secondary_color = "#f7f7f7".to_string();
     theme.tertiary_color = "#f7f7f7".to_string();
     theme.background = "#ffffff".to_string();
+    theme.font_family = "system-ui, -apple-system, 'Segoe UI', Arial, sans-serif".to_string();
     theme.font_family = "system-ui, -apple-system, 'Segoe UI', Arial, sans-serif".to_string();
     theme
 }
