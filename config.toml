@@ -1,7 +1,7 @@
 title = "sblog"
 tagline = "A tiny static blog"
-base_url = "https://example.com"
-og_image = "https://example.com/og-image.png"
+base_url = "https://jaskaran-23.github.io/blogs"
+og_image = "https://jaskaran-23.github.io/blogs/og-image.png"
 twitter_handle = "sblog"
 
 # Paths (relative to the project root).
